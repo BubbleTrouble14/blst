@@ -67,9 +67,8 @@ if [ "x$CROSS_COMPILE" = "x" ]; then
                           else     { print $1 } }'`
 fi
 
-predefs=`(${CC} ${CFLAGS} -dM -E -x c /dev/null || true) 2>/dev/null`
-
-if [ -z "${CROSS_COMPILE}${AR}" ] && echo ${predefs} | grep -q clang; then
+if [ -z "${CROSS_COMPILE}${AR}" ] && \
+   (${CC} -dM -E -x c /dev/null) 2>/dev/null | grep -q clang; then
     search_dirs=`${CC} -print-search-dirs  | awk -F= '/^programs:/{print$2}' | \
                  (sed -E -e 's/([a-z]):\\\/\/\1\//gi' -e 'y/\\\;/\/:/' 2>/dev/null || true)`
     if [ -n "$search_dirs" ] && \
@@ -80,16 +79,13 @@ if [ -z "${CROSS_COMPILE}${AR}" ] && echo ${predefs} | grep -q clang; then
 fi
 AR=${AR:-${CROSS_COMPILE}ar}
 
-if echo ${predefs} | grep -q x86_64; then
+if (${CC} ${CFLAGS} -dM -E -x c /dev/null) 2>/dev/null | grep -q x86_64; then
     if (grep -q -e '^flags.*\badx\b' /proc/cpuinfo) 2>/dev/null; then
         cflags="-D__ADX__ $cflags"
     fi
 fi
-if echo ${predefs} | grep -q __AVX__; then
+if (${CC} ${CFLAGS} -dM -E -x c /dev/null) 2>/dev/null | grep -q __AVX__; then
     cflags="$cflags -mno-avx" # avoid costly transitions
-fi
-if echo ${predefs} | grep -q 'x86_64\|aarch64'; then :; else
-    cflags="$cflags -D__BLST_NO_ASM__"
 fi
 
 CFLAGS="$CFLAGS $cflags"
@@ -102,16 +98,33 @@ trap '[ $? -ne 0 ] && rm -f libblst.a; rm -f *.o ${TMPDIR}/*.blst.$$' 0
 (set -x; ${CC} ${CFLAGS} -c ${TOP}/build/assembly.S)
 (set -x; ${AR} rc libblst.a *.o)
 
+# if [ $shared ]; then
+#     case $flavour in
+#         macosx) (set -x; ${CC} -dynamiclib -o libblst$dll.dylib \
+#                                -all_load libblst.a ${CFLAGS}); exit 0;;
+#         mingw*) sharedlib="blst.dll ${TOP}/build/win64/blst.def"
+#                 CFLAGS="${CFLAGS} --entry=DllMain ${TOP}/build/win64/dll.c"
+#                 CFLAGS="${CFLAGS} -nostdlib -lgcc";;
+#         *)      sharedlib=libblst$dll.so;;
+#     esac
+#     (set -x; ${CC} -shared -o $sharedlib \
+#                    -Wl,--whole-archive,libblst.a,--no-whole-archive ${CFLAGS} \
+#                    -Wl,-Bsymbolic)
+# fi
 if [ $shared ]; then
     case $flavour in
         macosx) (set -x; ${CC} -dynamiclib -o libblst$dll.dylib \
-                               -all_load libblst.a ${CFLAGS}); exit 0;;
+                               -all_load libblst.a ${CFLAGS} \
+                               -Wl,-install_name,libblst.dylib); exit 0;;  # macOS equivalent of SONAME
         mingw*) sharedlib="blst.dll ${TOP}/build/win64/blst.def"
                 CFLAGS="${CFLAGS} --entry=DllMain ${TOP}/build/win64/dll.c"
-                CFLAGS="${CFLAGS} -nostdlib -lgcc";;
-        *)      sharedlib=libblst$dll.so;;
+                CFLAGS="${CFLAGS} -nostdlib -lgcc"
+                (set -x; ${CC} -shared -o $sharedlib \
+                -Wl,--whole-archive,libblst.a,--no-whole-archive ${CFLAGS} \
+                -Wl,-Bsymbolic -Wl,--out-implib,libblst.dll.a);;  # Windows equivalent of SONAME
+        *)      sharedlib=libblst$dll.so
+                (set -x; ${CC} -shared -o $sharedlib \
+                -Wl,--whole-archive,libblst.a,--no-whole-archive ${CFLAGS} \
+                -Wl,-Bsymbolic -Wl,-soname,libblst.so);;  # Linux and others
     esac
-    (set -x; ${CC} -shared -o $sharedlib \
-                   -Wl,--whole-archive,libblst.a,--no-whole-archive ${CFLAGS} \
-                   -Wl,-Bsymbolic)
 fi
